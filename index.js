@@ -5,6 +5,7 @@ const utils = require('./lib/utils');
 const BemIntegratorPluginDependency = require('./lib/dependency');
 const BemIntegratorStore = require('./lib/store');
 const VirtualFile = require('./lib/virtual-chunk');
+const processHtmlWebpackPlugin = require('./lib/processHtmlWebpackPlguin');
 
 const sharedStore = new BemIntegratorStore();
 const PLUGIN_NAME = 'BemIntegratorPlugin';
@@ -20,7 +21,7 @@ class BemIntegratorPlugin {
         options.scripts = utils.stringToArray(options.scripts);
         options.levels = utils.stringToArray(options.levels);
         options.techs = Array.from(new Set(utils.stringToArray(options.techs).concat(options.scripts)));
-        options.plugins = Array.isArray(options.plugins) ? options.plugins : [];
+        options.plugins = utils.isIterable(options.plugins) ? [...options.plugins] : [];
 
         if (options.levels.length === 0) {
             throw new Error(`${PLUGIN_NAME}: "levels" option is required`);
@@ -163,7 +164,9 @@ class BemIntegratorPlugin {
 
 
     applyPlugins(compiler) {
-        for (const plugin of this.options.plugins) {
+        const plugins = [processHtmlWebpackPlugin].concat(this.options.plugins);
+
+        for (const plugin of plugins) {
             const targets = plugin(compiler, this);
 
             if (utils.isIterable(targets)) {
