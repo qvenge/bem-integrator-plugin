@@ -1,11 +1,9 @@
 'use strict';
 
 const path = require('path');
-const util = require('util');
-const SingleEntryDependency = require('webpack/lib/dependencies/SingleEntryDependency');
+const utils = require('./lib/utils');
 const BemIntegratorPluginDependency = require('./lib/dependency');
 const BemIntegratorStore = require('./lib/store');
-const { stringToArray, processEntities, equalSet } = require('./lib/utils');
 const VirtualFile = require('./lib/virtual-chunk');
 
 const sharedStore = new BemIntegratorStore();
@@ -16,31 +14,32 @@ class BemIntegratorPlugin {
     constructor(options) {
         this.options = options = Object.assign({}, options);
 
-        this.options.include = options.include ? stringToArray(options.include) : true;
-        this.options.exclude = options.exclude ? stringToArray(options.exclude) : false;
+        options.include = options.include ? utils.stringToArray(options.include) : true;
+        options.exclude = options.exclude ? utils.stringToArray(options.exclude) : false;
+        options.hwpOptions = options.hwpOptions || {};
+        options.scripts = utils.stringToArray(options.scripts);
+        options.levels = utils.stringToArray(options.levels);
+        options.techs = Array.from(new Set(utils.stringToArray(options.techs).concat(options.scripts)));
+        options.plugins = Array.isArray(options.plugins) ? options.plugins : [];
 
-        this.options.scripts = stringToArray(options.scripts);
-        this.options.levels = stringToArray(options.levels);
-        this.options.techs = Array.from(new Set(stringToArray(options.techs).concat(this.options.scripts)));
-
-        if (this.options.levels.length === 0) {
+        if (options.levels.length === 0) {
             throw new Error(`${PLUGIN_NAME}: "levels" option is required`);
         }
         
-        if (this.options.techs.length === 0) {
+        if (options.techs.length === 0) {
             throw new Error(`${PLUGIN_NAME}: "techs" option is required`);
         }
 
         this.targets = new Map();
-        this.preveTargetStates = new Map();
+        this.pluginTargets = [];
         this.virtualFiles = new Map();
-        this.cachedModules = new WeakMap();
+        this.previousEntities = new WeakMap();
+        this.cachedOrigins = new WeakMap();
         this.childCompilationAssets = undefined;
         this.needAdditionalSeal = false;
     }
 
     apply(compiler) {
-
         compiler.hooks.afterEnvironment.tap(PLUGIN_NAME, () => {
             this.context = path.resolve(compiler.context);
             this.ifs = compiler.inputFileSystem;
@@ -51,34 +50,7 @@ class BemIntegratorPlugin {
         });
 
 
-        const collectEntities = (compiler) => {
-            compiler.hooks.thisCompilation.tap(PLUGIN_NAME, compilation => {
-                compilation.hooks.finishModules.tap(PLUGIN_NAME, modules => {
-                    for (const module of modules) {
-                        const targets = sharedStore.get(module) || this.cachedModules.get(module);
-
-                        if (targets) {
-                            for (const [ target, _entities ] of targets) {
-                                if (this.targets.has(target)) {
-                                    const { entities } = this.targets.get(target);
-
-                                    if (entities) {
-                                        _entities.forEach(entities.add, entities);
-                                    }
-                                }
-                            }
-
-                            module.buildInfo.cacheable && this.cachedModules.set(module, targets);
-                        }
-                    }
-                });
-
-                compilation.hooks.childCompiler.tap(PLUGIN_NAME, childCompiler => {
-                    collectEntities(childCompiler);
-                });
-            });
-        };
-        collectEntities(compiler);
+        this.applyPlugins(compiler);
 
         
         compiler.hooks.thisCompilation.tap(PLUGIN_NAME, (compilation, { contextModuleFactory, normalModuleFactory }) => {
@@ -117,50 +89,61 @@ class BemIntegratorPlugin {
                 }
             });
 
+
             compilation.hooks.buildModule.tap(PLUGIN_NAME, module => {
-                for (const reason of module.reasons) {
-                    const dependency = reason.dependency;
+                if (!module.issuer && ~compilation.entries.indexOf(module)) {
+                    const entryDependency = utils.getEntryDependency(module);
+                    const name = entryDependency.name || entryDependency.loc.name;
 
-                    if (dependency instanceof SingleEntryDependency) {
-                        const entry = dependency;
-        
-                        if (!this.targets.has(entry) && this.isTarget(entry)) {
-                            const matchRelativePath = /^\.\.?\//;
-                            const filename = path.resolve(this.context, this.generateFileName(entry));
-                            const virtualFile = this.createVirtualFile(filename);
+                    if (this.verifyTarget(name)) {
+                        const filename = path.join(this.context, `bem.module.${name}.js`);
+                        const context = module.resource ? path.dirname(module.resource) : this.context;
+                        const request = utils.toRelativeRequest(context, filename);
 
-                            let request = path.relative(path.dirname(module.resource), filename);
+                        const bemDependency = this.createDependency(request);
+                        bemDependency.targetName = name;
+                        bemDependency.filename = filename;
 
-                            if (!path.isAbsolute(request) && !matchRelativePath.test(request)) {
-                                request = './' + request;
-                            }
-
-                            const bemDependency = this.createDependency(request);
-                            module.addDependency(bemDependency);
-                            this.targets.set(entry, { entities: new Set(), bemDependency, virtualFile });
-                        }
+                        this.createVirtualFile(filename);
+                        module.dependencies.unshift(bemDependency);
                     }
                 }
             });
 
+
+            compilation.hooks.finishModules.tap(PLUGIN_NAME, modules => {
+                for (const module of modules) {
+                    this.processModuleEntities(module, this.targets);
+                }
+            });
+
+
             compilation.hooks.optimizeAssets.tapPromise(PLUGIN_NAME, async () => {
                 const rebuildingModules = [];
-                const rebuildModule = util.promisify(compilation.rebuildModule).bind(compilation);
+                const rebuildModule = utils.promisify(compilation.rebuildModule).bind(compilation);
 
-                for (const [ entry, { entities, bemDependency, virtualFile } ] of this.targets) {
-                    const prevState = this.preveTargetStates.get(entry);
+                for (const entryModule of compilation.entries) {
+                    const bemDependency = entryModule.dependencies.find(dep => dep instanceof BemIntegratorPluginDependency);
 
-                    if (entities.size && !(prevState && equalSet(prevState, entities))) {
-                        const reqs = await this.retrieveFilenames(entities);
-                        const content = this.generateContent(reqs);
+                    if (bemDependency) {
+                        const { targetName, filename } = bemDependency;
+                        const entities = this.mergeAllEntities(targetName);
+                        const previousEntities = this.previousEntities.get(entryModule);
+                        const isReasonabelFirstPass = !previousEntities && entities.size;
+                        const entitiesMatch = previousEntities && utils.equalSet(previousEntities, entities);
 
-                        if (!virtualFile.match(content)) {
-                            virtualFile.setContent(content);
-                            rebuildingModules.push(rebuildModule(bemDependency.module));
+                        if (isReasonabelFirstPass || !entitiesMatch) {
+                            const reqs = await this.retrieveFilenames(entities);
+                            const content = this.generateContent(reqs);
+                            const virtualFile = this.virtualFiles.get(filename);
+
+                            if (!virtualFile.match(content)) {
+                                virtualFile.setContent(content);
+                                rebuildingModules.push(rebuildModule(bemDependency.module));
+                                this.previousEntities.set(entryModule, new Set(entities));
+                            }
                         }
                     }
-
-                    this.preveTargetStates.set(entry, new Set(entities));
                 }
 
                 rebuildingModules.length && (this.needAdditionalSeal = true);
@@ -172,29 +155,61 @@ class BemIntegratorPlugin {
 
     prepareNewCompilation(compilation) {
         sharedStore.clear();
-        this.targets.forEach((target) => target.entities.clear());
+        this.targets.clear();
         this.childCompilationAssets = undefined;
         this.needAdditionalSeal = false;
         this.mainCompilation = compilation;
     }
 
 
-    findEntryTarget(target) {
-        return Array.from(this.targets.keys()).find(entry =>
-            ((typeof target === 'object' && target === entry) ||
-            (typeof target === 'string' && target === entry.loc.name) ||
-            (Array.isArray(target) && ~target.indexOf(entry.loc.name)))
-        );
-    }
+    applyPlugins(compiler) {
+        for (const plugin of this.options.plugins) {
+            const targets = plugin(compiler, this);
 
-
-    generateFileName(entry) {
-        return `bem.module.${entry.loc.name}.js`
+            if (utils.isIterable(targets)) {
+                this.pluginTargets.push(targets);
+            }
+        }
     }
 
 
     retrieveFilenames(entities) {
-        return processEntities(entities, this.options.levels, this.options.techs);
+        return utils.processEntities(entities, this.options.levels, this.options.techs);
+    }
+
+
+    mergeAllEntities(target) {
+        const result = new Set();
+        const allTargets = [...this.pluginTargets, this.targets];
+
+        for (const targets of allTargets) {
+            const entities = targets.get(target);
+            
+            if (entities) {
+                entities.forEach(result.add, result);
+            }
+        }
+
+        return result;
+    }
+
+
+    processModuleEntities(module, targets) {
+        const moduleTargets = sharedStore.get(module) || this.cachedOrigins.get(module);
+
+        if (moduleTargets) {
+            for (const [ target, moduleEntities ] of moduleTargets) {
+                const entities = targets.get(target);
+
+                if (entities) {
+                    moduleEntities.forEach(entities.add, entities);
+                } else {
+                    targets.set(target, new Set(moduleEntities));
+                }                                  
+            }
+
+            module.buildInfo.cacheable && this.cachedOrigins.set(module, moduleTargets);
+        }
     }
 
 
@@ -266,9 +281,7 @@ class BemIntegratorPlugin {
     }
 
 
-    isTarget(entry) {
-        const name = entry.loc.name;
-        
+    verifyTarget(name) {        
         const include = name => {
             return this.options.include === true || ~this.options.include.indexOf(name);
         };
