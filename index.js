@@ -220,7 +220,7 @@ class BemIntegratorPlugin {
         let code = ``;
 
         if (this.options.scripts.length) {
-            code += 'var bemEntities = Object.create(null);\n\n';
+            code += 'var bemEntities = window.bemEntities = Object.create(null);\n\n';
         }
 
         for (const [entity, files] of entities) {
@@ -256,8 +256,6 @@ class BemIntegratorPlugin {
             code += `    instance.init && instance.init();\n`;
             code += `  });\n`;
             code += `}\n\n`;
-
-            code += 'window.bemEntities = bemEntities;\n';
         }
 
         return Buffer.from(code, 'utf8');
