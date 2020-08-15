@@ -34,7 +34,6 @@ class BemIntegratorPlugin {
         this.targets = new Map();
         this.pluginTargets = [];
         this.virtualFiles = new Map();
-        this.previousEntities = new WeakMap();
         this.cachedOrigins = new WeakMap();
         this.childCompilationAssets = undefined;
         this.needAdditionalSeal = false;
@@ -129,25 +128,21 @@ class BemIntegratorPlugin {
                     if (bemDependency) {
                         const { targetName, filename } = bemDependency;
                         const entities = this.mergeAllEntities(targetName);
-                        const previousEntities = this.previousEntities.get(entryModule);
-                        const isReasonabelFirstPass = !previousEntities && entities.size;
-                        const entitiesMatch = previousEntities && utils.equalSet(previousEntities, entities);
+                        const reqs = await this.retrieveFilenames(entities);
+                        const content = this.generateContent(reqs);
+                        const virtualFile = this.virtualFiles.get(filename);
 
-                        if (isReasonabelFirstPass || !entitiesMatch) {
-                            const reqs = await this.retrieveFilenames(entities);
-                            const content = this.generateContent(reqs);
-                            const virtualFile = this.virtualFiles.get(filename);
-
-                            if (!virtualFile.match(content)) {
-                                virtualFile.setContent(content);
-                                rebuildingModules.push(rebuildModule(bemDependency.module));
-                                this.previousEntities.set(entryModule, new Set(entities));
-                            }
+                        if (!virtualFile.match(content)) {
+                            virtualFile.setContent(content);
+                            rebuildingModules.push(rebuildModule(bemDependency.module));
                         }
                     }
                 }
 
-                rebuildingModules.length && (this.needAdditionalSeal = true);
+                if (rebuildingModules.length) {
+                    this.needAdditionalSeal = true;
+                }
+
                 return Promise.all(rebuildingModules);
             });
         });
