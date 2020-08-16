@@ -248,7 +248,9 @@ class BemIntegratorPlugin {
             code += `\n`;
             code += `for (var entityName in bemEntities) {\n`;
             code += `  bemEntities[entityName].instances.forEach(function(instance) {\n`;
-            code += `    instance.init && instance.init();\n`;
+            code += `    if (instance.postInit) {\n`;
+            code += `      setTimeout(instance.postInit.bind(instance), 0);\n`;
+            code += `    }\n`;
             code += `  });\n`;
             code += `}\n\n`;
         }
