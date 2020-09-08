@@ -215,44 +215,22 @@ class BemIntegratorPlugin {
         let code = ``;
 
         if (this.options.scripts.length) {
-            code += 'var bemEntities = window.bemEntities = Object.create(null);\n\n';
+            code += `window.BEM = require(${ JSON.stringify(path.join(path.relative(this.context, __dirname), 'globalBemObject.js')) });\n\n`;
         }
 
+        // TODO: добавить проверку путей вида ../
         for (const [entity, files] of entities) {
             for(const req of files) {
                 if (~this.options.scripts.indexOf(path.extname(req).slice(1))) {
-                    code += `var bemClass = require(${ JSON.stringify( './' + path.relative(this.context, req)) });\n\n`;
+                    code += `var bemClass = require(${ JSON.stringify('./' + path.relative(this.context, req)) });\n\n`;
                     code += `if (bemClass && typeof(bemClass) === 'function') {\n`;
-                    code += `  if (!bemEntities['${entity}']) {\n`;
-                    code += `    bemEntities['${entity}'] = { constructor: bemClass, instances: [] };\n`
-                    code += `  }\n\n`;
-                    code += `  var instances = bemEntities['${entity}'].instances;\n`;
-                    code += `  var elems = document.getElementsByClassName('${entity}');\n\n`;
-                    code += `  for (var i = 0; i < elems.length; ++i) {\n`;
-                    code += `    var elem = elems[i];\n`;
-                    code += `    var entity = new bemClass(elem, '${entity}');\n\n`;
-                    code += `    if (!elem.bemEntities) {\n`;
-                    code += `      elem.bemInstances = Object.create(null);\n`;
-                    code += `    }\n\n`
-                    code += `    elem.bemInstances['${entity}'] = entity;\n`;
-                    code += `    instances.push(entity);\n`;
-                    code += `  }\n`;
-                    code += `}\n\n`;
+                    code += `    window.BEM.entityClasses['${entity}'] = bemClass;\n`
+                    code += `}\n`;
                 } else {
-                    code += `require(${ JSON.stringify( './' + path.relative(this.context, req) ) });\n`;
+                    code += `require(${ JSON.stringify('./' + path.relative(this.context, req)) });\n`;
                 }
             }
-        }
-
-        if (this.options.scripts.length) {
-            code += `\n`;
-            code += `for (var entityName in bemEntities) {\n`;
-            code += `  bemEntities[entityName].instances.forEach(function(instance) {\n`;
-            code += `    if (instance.postInit) {\n`;
-            code += `      setTimeout(instance.postInit.bind(instance), 0);\n`;
-            code += `    }\n`;
-            code += `  });\n`;
-            code += `}\n\n`;
+            code += `\n\n`;
         }
 
         return Buffer.from(code, 'utf8');
