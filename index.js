@@ -232,9 +232,9 @@ class BemIntegratorPlugin {
                     code += `    var elem = elems[i];\n`;
                     code += `    var entity = new bemClass(elem, '${entity}');\n\n`;
                     code += `    if (!elem.bemEntities) {\n`;
-                    code += `      elem.bemEntities = Object.create(null);\n`;
+                    code += `      elem.bemInstances = Object.create(null);\n`;
                     code += `    }\n\n`
-                    code += `    elem.bemEntities['${entity}'] = entity;\n`;
+                    code += `    elem.bemInstances['${entity}'] = entity;\n`;
                     code += `    instances.push(entity);\n`;
                     code += `  }\n`;
                     code += `}\n\n`;
