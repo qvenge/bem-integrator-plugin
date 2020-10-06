@@ -5,16 +5,15 @@ module.exports = {
         var bemInstances = domElem.bemInstances;
         if (!bemInstances) {
             bemInstances = domElem.bemInstances = Object.create(null);
-            return bemInstances[entityName] = new window.BEM.entityClasses[entityName](domElem);
         }
         var entityInstance = bemInstances[entityName];
         if (!entityInstance) {
-            entityInstance = bemInstances[entityName] = new window.BEM.entityClasses[entityName](domElem);
+            var params = window.BEM.getParams(domElem, entityName);
+            entityInstance = bemInstances[entityName] = new window.BEM.entityClasses[entityName](domElem, params);
         }
         return entityInstance;
     },
 
-    
     initAllEntities: function() {
         var entityNames = Object.keys(window.BEM.entityClasses);
 
