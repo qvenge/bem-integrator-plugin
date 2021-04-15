@@ -2,10 +2,6 @@
 
 Plugin to automate BEM dependency inclusions.
 
-## Installation
-
-`npm install --save-dev bem-integrator-plugin`
-
 ## Loaders
 
 ### preHtmlLoader (required)
